@@ -1,85 +1,67 @@
-from dotenv import load_dotenv
-import os
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
-from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from aiogram.types import Message
-from aiogram import F
 import yt_dlp
+import os
+from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-BASE_URL = os.getenv("BASEURL")
-
+BASE_URL = os.getenv("BASEURL", "https://asian-vpn.ru")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+DOWNLOADS = "/home/telegram_bot/bots/zloy_yt2tg_bot/downloads"
+os.makedirs(DOWNLOADS, exist_ok=True)
 
-# --- Функция извлечения ID из YouTube ссылки ---
-def get_video_id(link: str) -> str | None:
-    # Поддержка разных форматов ссылок
-    import re
-    patterns = [
-        r"youtu\.be/([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/embed/([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})"
-    ]
-    for pattern in patterns:
-        if m := re.search(pattern, link):
-            return m.group(1)
-    return None
-
-
-# --- Команда /start ---
-@dp.message(CommandStart())
+@dp.message(Command(commands=["start"]))
 async def start(message: Message):
-    await message.answer("Отправь мне ссылку на YouTube-видео, а я дам ссылку на скачивание.")
+    await message.answer("Привет! Отправь мне ссылку на YouTube, я скачаю видео и дам ссылку.")
 
-
-# --- Обработка всех сообщений со ссылкой ---
-@dp.message(F.text)
-async def get_video(message: Message):
+@dp.message()
+async def download_video(message: Message):
     url = message.text.strip()
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return await message.answer("Это не похоже на ссылку YouTube.")
 
-    video_id = get_video_id(url)
-    if not video_id:
-        await message.answer("Это не похоже на ссылку YouTube 🙃")
-        return
+    try:
+        # Получаем ID видео и название
+        with yt_dlp.YoutubeDL({}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            video_id = info.get("id")
+            title = info.get("title")
 
-    # Папка для загрузок
-    downloads_dir = os.getenv("DOWNLOADS", "downloads")
+        filepath = os.path.join(DOWNLOADS, f"{video_id}.mp4")
 
-    # Создаем папку, если её нет
-    os.makedirs(downloads_dir, exist_ok=True)
+        # Отправляем сообщение о скачивании
+        msg = await message.answer(f"Скачиваю видео: {title}...")
 
-    output_path = os.path.join(downloads_dir, f"{video_id}.mp4")
-
-    # Если файл уже скачан — не скачиваем снова
-    if not os.path.exists(output_path):
-        await message.answer("⏳ Скачиваю видео...")
-
-        # Параметры скачивания
-        ydl_opts = {
-            "outtmpl": output_path,
-            "format": "mp4/bestvideo+bestaudio/best",
-            "merge_output_format": "mp4"
-        }
-
-        try:
+        # Скачиваем только если файла нет
+        if not os.path.exists(filepath):
+            ydl_opts = {
+                "format": "bestvideo+bestaudio/best",
+                "outtmpl": filepath,
+                "merge_output_format": "mp4"
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-        except Exception as e:
-            await message.answer(f"Ошибка загрузки: {e}")
-            return
 
-    # Отдаём ссылку на скачивание
-    download_link = f"{BASE_URL}/{video_id}"
-    await message.answer(f"Готово!\n👉 {download_link}")
+        # Удаляем сообщения
+        await bot.delete_message(message.chat.id, message.message_id)
+        await bot.delete_message(msg.chat.id, msg.message_id)
+
+        # Отправляем один пост с иконками
+        text = (
+            f"🎬 Ссылка на оригинальный YouTube:\n{url}\n\n"
+            f"💾 Ссылка на скачанное видео:\n{BASE_URL}/{video_id}"
+        )
+        await message.answer(text)
+
+    except Exception as e:
+        await message.answer(f"Ошибка при скачивании видео:\n{e}")
 
 
-# --- Запуск ---
 if __name__ == "__main__":
     import asyncio
     asyncio.run(dp.start_polling(bot))
